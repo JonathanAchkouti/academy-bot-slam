@@ -33,7 +33,7 @@ struct FeedbackSnapshot
   std::string job_id;
   std::string leg;
   std::string target_location;
-  double distance_remaining{0.0};
+  double distance_remaining{-1.0};
   std::uint16_t attempt{0};
   std::string state;
   double elapsed_sec{0.0};
