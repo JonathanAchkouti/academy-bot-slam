@@ -12,7 +12,7 @@ string message        # human-readable summary
 string  job_id
 string  leg               # "pickup" | "dropoff"
 string  target_location   # the named location this leg is heading to
-float32 distance_remaining # metres
+float32 distance_remaining # metres; -1.0 when not yet known
 uint16  attempt           # 1-based attempt number for the current leg
 string  state             # NAVIGATING | RETRYING | RECOVERING | DWELLING
 float32 elapsed_sec       # since goal acceptance
