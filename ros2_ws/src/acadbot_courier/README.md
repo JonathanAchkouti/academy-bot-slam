@@ -105,12 +105,24 @@ behavior tree without editing YAML:
 ros2 launch acadbot_courier courier_demo.launch.py use_behavior_tree:=true
 ```
 
+For a live edit-without-rebuild demonstration, point directly at the source XML:
+
+```bash
+ros2 launch acadbot_courier courier_demo.launch.py \
+  use_behavior_tree:=true \
+  behavior_tree_xml:=/ros2_ws/src/acadbot_courier/bt/courier_mission.xml
+```
+
 The XML `Sequence` declares pickup navigation, pickup dwell, dropoff navigation,
 and dropoff dwell. Each navigation leaf is wrapped in BT.CPP's built-in
 `RetryUntilSuccessful`, while the custom stateful leaf sends and polls the same
 Nav2 client used by the fallback. Halting the tree cancels the active Nav2 goal;
 the outer delivery action reports `CANCELED` only after confirmation, otherwise
-it terminates honestly as `TIMEOUT`.
+it terminates honestly as `TIMEOUT`. BT node transitions are printed to the
+terminal while this executor is active. Courier success also requires C++
+evidence that the configured pickup was reached before the configured dropoff;
+an XML recovery branch cannot turn a failed delivery into `success=true` merely
+by returning BT `SUCCESS`.
 
 ## Demo scenarios
 

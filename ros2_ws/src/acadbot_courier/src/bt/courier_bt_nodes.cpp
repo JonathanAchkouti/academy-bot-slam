@@ -97,6 +97,17 @@ BT::NodeStatus NavigateToLocation::onRunning()
   phase_ = Phase::IDLE;
   context_->last_result = result.value();
   if (result.value() == NavResult::SUCCEEDED) {
+    if (leg_ == kLegPickup && location_ == context_->expected_pickup) {
+      context_->pickup_reached = true;
+      // A later pickup starts a new delivery sequence. A previous dropoff can
+      // no longer justify success for the newly picked-up mission payload.
+      context_->dropoff_reached_after_pickup = false;
+    } else if (
+      leg_ == kLegDropoff && location_ == context_->expected_dropoff &&
+      context_->pickup_reached)
+    {
+      context_->dropoff_reached_after_pickup = true;
+    }
     return BT::NodeStatus::SUCCESS;
   }
 
@@ -121,6 +132,8 @@ void NavigateToLocation::onHalted()
 BT::NodeStatus NavigateToLocation::start_navigation()
 {
   try {
+    // Every new Nav2 goal starts without an outstanding cancellation. If this
+    // goal is later halted, onHalted() replaces this with the real handshake result.
     context_->cancel_confirmed = true;
     auto target_pose = context_->location_book->pose(location_);
     context_->nav_client->set_target(target_pose);

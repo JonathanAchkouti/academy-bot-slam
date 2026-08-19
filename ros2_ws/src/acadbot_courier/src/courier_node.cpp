@@ -22,6 +22,7 @@
 #include "acadbot_courier_msgs/action/deliver.hpp"
 #include "acadbot_courier_msgs/srv/request_delivery.hpp"
 #include "behaviortree_cpp/bt_factory.h"
+#include "behaviortree_cpp/loggers/bt_cout_logger.h"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -407,6 +408,8 @@ private:
     context->retry_backoff_sec = retry_backoff_sec_;
     context->clear_costmap_before_retry = clear_costmap_before_retry_;
     context->leg_timeout_sec = leg_timeout_sec_;
+    context->expected_pickup = job->pickup;
+    context->expected_dropoff = job->dropoff;
     context->current_location = job->pickup;
     context->set_snapshot =
       [this, job_id](const Leg & leg, std::uint16_t attempt, const std::string & state) {
@@ -425,6 +428,7 @@ private:
       blackboard->set("dropoff_dwell", dropoff_dwell_sec_);
 
       auto tree = factory.createTreeFromFile(behavior_tree_xml_, blackboard);
+      BT::StdCoutLogger bt_logger(tree);
       RCLCPP_INFO(
         get_logger(), "%s: executing courier behavior tree from %s",
         job_id.c_str(), behavior_tree_xml_.c_str());
@@ -450,9 +454,11 @@ private:
           std::chrono::duration<double>(behavior_tree_tick_period_sec_));
       }
 
-      if (status == BT::NodeStatus::SUCCESS) {
-        // The XML Sequence can succeed only after both navigation leaves and
-        // both dwell leaves have returned SUCCESS.
+      if (status == BT::NodeStatus::SUCCESS && context->pickup_reached &&
+        context->dropoff_reached_after_pickup)
+      {
+        // Tree status alone is not trusted: runtime-editable XML may contain a
+        // successful recovery branch that did not complete the delivery.
         auto result = std::make_shared<Deliver::Result>();
         result->success = true;
         result->outcome = kOutcomeSucceeded;
@@ -463,6 +469,21 @@ private:
         registry_->finish(job_id, kOutcomeSucceeded);
         finish_feedback();
         RCLCPP_INFO(get_logger(), "%s: SUCCEEDED via behavior tree", job_id.c_str());
+        return;
+      }
+
+      if (status == BT::NodeStatus::SUCCESS) {
+        auto result = std::make_shared<Deliver::Result>();
+        result->success = false;
+        result->outcome = kOutcomeNavAborted;
+        result->failed_leg = context->pickup_reached ? kLegDropoff : kLegPickup;
+        result->attempts_used = context->attempts_used;
+        result->message =
+          "behavior tree returned SUCCESS without reaching the configured pickup then dropoff";
+        goal_handle->abort(result);
+        registry_->finish(job_id, kOutcomeNavAborted);
+        finish_feedback();
+        RCLCPP_ERROR(get_logger(), "%s: %s", job_id.c_str(), result->message.c_str());
         return;
       }
 

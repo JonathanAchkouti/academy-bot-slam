@@ -32,11 +32,15 @@ struct MissionContext
 
   std::uint16_t attempts_used{0};
   std::uint16_t current_attempt{0};
+  std::string expected_pickup;
+  std::string expected_dropoff;
   std::string current_leg{kLegPickup};
   std::string current_location;
   std::string failure_message;
   NavResult last_result{NavResult::ABORTED};
   bool cancel_confirmed{true};
+  bool pickup_reached{false};
+  bool dropoff_reached_after_pickup{false};
 };
 
 class NavigateToLocation : public BT::StatefulActionNode
