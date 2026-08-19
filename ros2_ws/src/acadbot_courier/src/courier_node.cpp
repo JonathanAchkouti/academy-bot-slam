@@ -227,7 +227,6 @@ private:
     {
       std::lock_guard<std::mutex> lock(feedback_mutex_);
       active_goal_ = goal_handle;
-      feedback_active_ = true;
       goal_started_at_ = std::chrono::steady_clock::now();
     }
     std::thread([this, goal_handle]() {execute(goal_handle);}).detach();
@@ -240,6 +239,7 @@ private:
     const std::string & state)
   {
     std::lock_guard<std::mutex> lock(feedback_mutex_);
+    feedback_active_ = true;
     feedback_snapshot_.job_id = job_id;
     feedback_snapshot_.leg = leg.name;
     feedback_snapshot_.target_location = leg.location;
@@ -310,11 +310,18 @@ private:
     // The outer action is not marked CANCELED until the robot-facing Nav2 goal
     // has completed its cancellation handshake.
     if (!nav_client_->cancel()) {
-      RCLCPP_FATAL(
-        get_logger(), "%s: Nav2 cancellation was not confirmed; outer action remains unfinished",
-        job_id.c_str());
+      auto result = std::make_shared<Deliver::Result>();
+      result->success = false;
+      result->outcome = kOutcomeTimeout;
+      result->failed_leg = leg.name;
+      result->attempts_used = attempts_used;
+      result->message =
+        "Nav2 cancellation was not confirmed during " + leg.name + " leg";
+      goal_handle->abort(result);
       registry_->finish(job_id, kOutcomeTimeout);
       finish_feedback();
+      RCLCPP_ERROR(
+        get_logger(), "%s: %s", job_id.c_str(), result->message.c_str());
       return;
     }
     auto result = std::make_shared<Deliver::Result>();
