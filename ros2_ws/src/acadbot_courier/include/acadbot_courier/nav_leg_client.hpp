@@ -43,6 +43,7 @@ public:
   bool send(const geometry_msgs::msg::PoseStamped & goal);
   void set_target(const geometry_msgs::msg::PoseStamped & goal);
   double distance_remaining() const;
+  std::optional<NavResult> poll_result();
   NavResult wait_for_result(
     double timeout_sec, const std::function<bool()> & cancel_requested);
   bool cancel();

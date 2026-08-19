@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" main_tree_to_execute="CourierMission">
+  <BehaviorTree ID="CourierMission">
+    <Sequence>
+      <RetryUntilSuccessful num_attempts="{max_attempts}">
+        <NavigateToLocation location="{pickup}" leg="pickup"/>
+      </RetryUntilSuccessful>
+      <Dwell seconds="{pickup_dwell}"/>
+      <RetryUntilSuccessful num_attempts="{max_attempts}">
+        <NavigateToLocation location="{dropoff}" leg="dropoff"/>
+      </RetryUntilSuccessful>
+      <Dwell seconds="{dropoff_dwell}"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="NavigateToLocation">
+      <input_port name="location" type="std::string"/>
+      <input_port name="leg" type="std::string"/>
+    </Action>
+    <Action ID="Dwell">
+      <input_port name="seconds" type="double"/>
+    </Action>
+  </TreeNodesModel>
+</root>

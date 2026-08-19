@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -13,12 +14,14 @@
 #include <utility>
 #include <vector>
 
+#include "acadbot_courier/bt/navigate_to_location.hpp"
 #include "acadbot_courier/job_registry.hpp"
 #include "acadbot_courier/location_book.hpp"
 #include "acadbot_courier/nav_leg_client.hpp"
 #include "acadbot_courier/types.hpp"
 #include "acadbot_courier_msgs/action/deliver.hpp"
 #include "acadbot_courier_msgs/srv/request_delivery.hpp"
+#include "behaviortree_cpp/bt_factory.h"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -65,18 +68,27 @@ public:
     job_ttl_sec_ = required_parameter<double>("job_ttl_sec");
     pickup_dwell_sec_ = required_parameter<double>("dwell.pickup");
     dropoff_dwell_sec_ = required_parameter<double>("dwell.dropoff");
+    use_behavior_tree_ = required_parameter<bool>("use_behavior_tree");
+    behavior_tree_xml_ = required_parameter<std::string>("behavior_tree_xml");
+    behavior_tree_tick_period_sec_ = required_parameter<double>("behavior_tree_tick_period_sec");
     max_concurrent_jobs_ = required_parameter<std::int64_t>("max_concurrent_jobs");
     queue_depth_ = required_parameter<std::int64_t>("queue_depth");
 
     if (max_attempts_per_leg_ < 1 || retry_backoff_sec_ < 0.0 || leg_timeout_sec_ <= 0.0 ||
       feedback_period_sec_ <= 0.0 || job_ttl_sec_ <= 0.0 || pickup_dwell_sec_ < 0.0 ||
-      dropoff_dwell_sec_ < 0.0)
+      dropoff_dwell_sec_ < 0.0 || behavior_tree_tick_period_sec_ <= 0.0)
     {
       throw std::runtime_error("courier timing and attempt parameters are outside valid ranges");
     }
     if (max_concurrent_jobs_ != 1 || queue_depth_ != 0) {
       throw std::runtime_error(
               "this Nav2-backed implementation requires max_concurrent_jobs=1 and queue_depth=0");
+    }
+    if (use_behavior_tree_ &&
+      (behavior_tree_xml_.empty() || !std::filesystem::is_regular_file(behavior_tree_xml_)))
+    {
+      throw std::runtime_error(
+              "use_behavior_tree=true requires a readable behavior_tree_xml file");
     }
 
     registry_ = std::make_unique<JobRegistry>(job_ttl_sec_);
@@ -120,8 +132,9 @@ public:
       [this]() {registry_->expire_stale(job_ttl_sec_);});
 
     RCLCPP_INFO(
-      get_logger(), "Courier ready with %zu locations and %ld attempt(s) per leg",
-      location_names.size(), static_cast<long>(max_attempts_per_leg_));
+      get_logger(), "Courier ready with %zu locations, %ld attempt(s) per leg, executor=%s",
+      location_names.size(), static_cast<long>(max_attempts_per_leg_),
+      use_behavior_tree_ ? "BehaviorTree.CPP" : "hand-written fallback");
   }
 
 private:
@@ -338,6 +351,151 @@ private:
 
   void execute(const std::shared_ptr<DeliverGoalHandle> goal_handle)
   {
+    if (use_behavior_tree_) {
+      execute_behavior_tree(goal_handle);
+    } else {
+      execute_hand_written(goal_handle);
+    }
+  }
+
+  void finish_bt_canceled(
+    const std::shared_ptr<DeliverGoalHandle> & goal_handle,
+    const std::string & job_id,
+    const std::shared_ptr<bt::MissionContext> & context)
+  {
+    auto result = std::make_shared<Deliver::Result>();
+    result->success = false;
+    result->failed_leg = context->current_leg;
+    result->attempts_used = context->attempts_used;
+    if (!context->cancel_confirmed) {
+      result->outcome = kOutcomeTimeout;
+      result->message =
+        "Nav2 cancellation was not confirmed during " + context->current_leg + " leg";
+      goal_handle->abort(result);
+      registry_->finish(job_id, kOutcomeTimeout);
+      RCLCPP_ERROR(get_logger(), "%s: %s", job_id.c_str(), result->message.c_str());
+    } else {
+      result->outcome = kOutcomeCanceled;
+      result->message = "cancelled during " + context->current_leg + " leg";
+      goal_handle->canceled(result);
+      registry_->finish(job_id, kOutcomeCanceled);
+      RCLCPP_INFO(get_logger(), "%s: CANCELED", job_id.c_str());
+    }
+    finish_feedback();
+  }
+
+  void execute_behavior_tree(const std::shared_ptr<DeliverGoalHandle> goal_handle)
+  {
+    const std::string job_id = goal_handle->get_goal()->job_id;
+    const auto job = registry_->get(job_id);
+    if (!job.has_value()) {
+      auto result = std::make_shared<Deliver::Result>();
+      result->success = false;
+      result->outcome = kOutcomeInvalidJob;
+      result->message = "job disappeared after action acceptance";
+      goal_handle->abort(result);
+      registry_->finish(job_id, kOutcomeInvalidJob);
+      finish_feedback();
+      return;
+    }
+
+    auto context = std::make_shared<bt::MissionContext>();
+    context->node = this;
+    context->location_book = location_book_.get();
+    context->nav_client = nav_client_.get();
+    context->cancel_requested = &cancel_requested_;
+    context->retry_backoff_sec = retry_backoff_sec_;
+    context->clear_costmap_before_retry = clear_costmap_before_retry_;
+    context->leg_timeout_sec = leg_timeout_sec_;
+    context->current_location = job->pickup;
+    context->set_snapshot =
+      [this, job_id](const Leg & leg, std::uint16_t attempt, const std::string & state) {
+        set_snapshot(job_id, leg, attempt, state);
+      };
+
+    try {
+      BT::BehaviorTreeFactory factory;
+      bt::register_courier_bt_nodes(factory, context);
+
+      auto blackboard = BT::Blackboard::create();
+      blackboard->set("pickup", job->pickup);
+      blackboard->set("dropoff", job->dropoff);
+      blackboard->set("max_attempts", static_cast<int>(max_attempts_per_leg_));
+      blackboard->set("pickup_dwell", pickup_dwell_sec_);
+      blackboard->set("dropoff_dwell", dropoff_dwell_sec_);
+
+      auto tree = factory.createTreeFromFile(behavior_tree_xml_, blackboard);
+      RCLCPP_INFO(
+        get_logger(), "%s: executing courier behavior tree from %s",
+        job_id.c_str(), behavior_tree_xml_.c_str());
+
+      BT::NodeStatus status = BT::NodeStatus::IDLE;
+      while (rclcpp::ok()) {
+        if (cancel_requested_.load()) {
+          tree.haltTree();
+          finish_bt_canceled(goal_handle, job_id, context);
+          return;
+        }
+
+        status = tree.tickOnce();
+        if (cancel_requested_.load()) {
+          tree.haltTree();
+          finish_bt_canceled(goal_handle, job_id, context);
+          return;
+        }
+        if (status != BT::NodeStatus::RUNNING) {
+          break;
+        }
+        std::this_thread::sleep_for(
+          std::chrono::duration<double>(behavior_tree_tick_period_sec_));
+      }
+
+      if (status == BT::NodeStatus::SUCCESS) {
+        // The XML Sequence can succeed only after both navigation leaves and
+        // both dwell leaves have returned SUCCESS.
+        auto result = std::make_shared<Deliver::Result>();
+        result->success = true;
+        result->outcome = kOutcomeSucceeded;
+        result->failed_leg.clear();
+        result->attempts_used = context->attempts_used;
+        result->message = "pickup and dropoff poses reached";
+        goal_handle->succeed(result);
+        registry_->finish(job_id, kOutcomeSucceeded);
+        finish_feedback();
+        RCLCPP_INFO(get_logger(), "%s: SUCCEEDED via behavior tree", job_id.c_str());
+        return;
+      }
+
+      auto result = std::make_shared<Deliver::Result>();
+      result->success = false;
+      result->outcome =
+        context->last_result == NavResult::TIMEOUT ? kOutcomeTimeout : kOutcomeNavAborted;
+      result->failed_leg = context->current_leg;
+      result->attempts_used = context->attempts_used;
+      result->message = context->failure_message.empty() ?
+        context->current_leg + " leg to '" + context->current_location + "' failed after " +
+        std::to_string(max_attempts_per_leg_) + " attempts" : context->failure_message;
+      goal_handle->abort(result);
+      registry_->finish(job_id, result->outcome);
+      finish_feedback();
+      RCLCPP_WARN(get_logger(), "%s: %s", job_id.c_str(), result->message.c_str());
+    } catch (const std::exception & error) {
+      nav_client_->cancel();
+      auto result = std::make_shared<Deliver::Result>();
+      result->success = false;
+      result->outcome = kOutcomeNavAborted;
+      result->failed_leg = context->current_leg;
+      result->attempts_used = context->attempts_used;
+      result->message = std::string("behavior tree execution failed: ") + error.what();
+      goal_handle->abort(result);
+      registry_->finish(job_id, kOutcomeNavAborted);
+      finish_feedback();
+      RCLCPP_ERROR(get_logger(), "%s: %s", job_id.c_str(), result->message.c_str());
+    }
+  }
+
+  void execute_hand_written(const std::shared_ptr<DeliverGoalHandle> goal_handle)
+  {
     const std::string job_id = goal_handle->get_goal()->job_id;
     const auto job = registry_->get(job_id);
     if (!job.has_value()) {
@@ -483,6 +641,9 @@ private:
   double job_ttl_sec_;
   double pickup_dwell_sec_;
   double dropoff_dwell_sec_;
+  bool use_behavior_tree_;
+  std::string behavior_tree_xml_;
+  double behavior_tree_tick_period_sec_;
   std::int64_t max_concurrent_jobs_;
   std::int64_t queue_depth_;
   std::string global_frame_;

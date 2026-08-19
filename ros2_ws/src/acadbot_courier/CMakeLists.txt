@@ -10,6 +10,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(acadbot_courier_msgs REQUIRED)
+find_package(behaviortree_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -35,10 +36,25 @@ ament_target_dependencies(courier_core
   tf2_geometry_msgs
   tf2_ros)
 
+add_library(courier_bt_nodes SHARED
+  src/bt/courier_bt_nodes.cpp
+)
+target_include_directories(courier_bt_nodes PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(courier_bt_nodes
+  PUBLIC courier_core BT::behaviortree_cpp)
+ament_target_dependencies(courier_bt_nodes
+  rclcpp)
+
 add_executable(courier_node src/courier_node.cpp)
-target_link_libraries(courier_node courier_core)
+target_link_libraries(courier_node
+  courier_core
+  courier_bt_nodes
+  BT::behaviortree_cpp)
 ament_target_dependencies(courier_node
   acadbot_courier_msgs
+  behaviortree_cpp
   geometry_msgs
   nav2_msgs
   rclcpp
@@ -58,6 +74,7 @@ ament_target_dependencies(initial_pose_publisher
 
 install(TARGETS
   courier_core
+  courier_bt_nodes
   courier_node
   delivery_client
   initial_pose_publisher
@@ -67,12 +84,12 @@ install(TARGETS
 
 install(DIRECTORY include/
   DESTINATION include)
-install(DIRECTORY config launch
+install(DIRECTORY bt config launch
   DESTINATION share/${PROJECT_NAME})
 
 ament_export_include_directories(include)
-ament_export_libraries(courier_core)
+ament_export_libraries(courier_core courier_bt_nodes)
 ament_export_dependencies(
-  geometry_msgs nav2_msgs rclcpp rclcpp_action tf2 tf2_geometry_msgs tf2_ros)
+  behaviortree_cpp geometry_msgs nav2_msgs rclcpp rclcpp_action tf2 tf2_geometry_msgs tf2_ros)
 
 ament_package()

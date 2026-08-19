@@ -7,6 +7,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Time
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -14,6 +15,7 @@ def generate_launch_description():
     package_share = get_package_share_directory('acadbot_courier')
     default_params = f'{package_share}/config/courier.yaml'
     default_locations = f'{package_share}/config/locations.yaml'
+    default_behavior_tree = f'{package_share}/bt/courier_mission.xml'
 
     localization = LaunchConfiguration('localization')
     nav2_delay = LaunchConfiguration('nav2_delay')
@@ -24,6 +26,8 @@ def generate_launch_description():
     spawn_yaw = LaunchConfiguration('spawn_yaw')
     courier_params_file = LaunchConfiguration('courier_params_file')
     locations_file = LaunchConfiguration('locations_file')
+    use_behavior_tree = LaunchConfiguration('use_behavior_tree')
+    behavior_tree_xml = LaunchConfiguration('behavior_tree_xml')
 
     # Verified against the repository's real autonomy.launch.py on 2026-08-16.
     # Re-check these arguments after pulling future acadbot_bringup changes.
@@ -70,7 +74,16 @@ def generate_launch_description():
                 executable='courier_node',
                 name='courier_node',
                 output='screen',
-                parameters=[locations_file, courier_params_file, {'use_sim_time': True}],
+                parameters=[
+                    locations_file,
+                    courier_params_file,
+                    {
+                        'use_sim_time': True,
+                        'use_behavior_tree': ParameterValue(
+                            use_behavior_tree, value_type=bool),
+                        'behavior_tree_xml': behavior_tree_xml,
+                    },
+                ],
             )
         ],
     )
@@ -85,6 +98,8 @@ def generate_launch_description():
         DeclareLaunchArgument('spawn_yaw', default_value='0.0'),
         DeclareLaunchArgument('courier_params_file', default_value=default_params),
         DeclareLaunchArgument('locations_file', default_value=default_locations),
+        DeclareLaunchArgument('use_behavior_tree', default_value='false'),
+        DeclareLaunchArgument('behavior_tree_xml', default_value=default_behavior_tree),
         autonomy,
         initial_pose,
         courier,

@@ -14,15 +14,18 @@ only claim this package makes about pickup or dropoff.
 - `include/acadbot_courier/location_book.hpp` — immutable named-pose lookup.
 - `include/acadbot_courier/job_registry.hpp` — thread-safe job IDs and lifecycle.
 - `include/acadbot_courier/nav_leg_client.hpp` — the only Nav2-facing class.
+- `include/acadbot_courier/bt/navigate_to_location.hpp` — courier BT context and asynchronous leaf declarations.
 - `src/location_book.cpp` — pose lookup and yaw-to-quaternion conversion.
 - `src/job_registry.cpp` — pending, active, finished, and expiry transitions.
 - `src/nav_leg_client.cpp` — Nav2 send, feedback, timeout, cancel, TF distance fallback, and costmap clearing.
 - `src/courier_node.cpp` — request service, delivery action, retries, dwell, and feedback timer.
+- `src/bt/courier_bt_nodes.cpp` — `NavigateToLocation` and `Dwell` BT leaf implementations.
 - `src/delivery_client.cpp` — demo CLI that requests and executes one delivery.
 - `src/initial_pose_publisher.cpp` — delayed AMCL initial-pose seed.
 - `config/locations.yaml` — named locations and initial pose.
 - `config/courier.yaml` — retry, timing, admission, frame, and ROS interface settings.
 - `launch/courier_demo.launch.py` — simulation, AMCL, Nav2, and courier one-command launch.
+- `bt/courier_mission.xml` — runtime-editable courier mission sequence and retry policy.
 
 The interfaces are in the separate `acadbot_courier_msgs` package so clients do
 not depend on the runtime implementation.
@@ -69,6 +72,9 @@ both the `courier_node` and `initial_pose_publisher` sections. Keep the duplicat
 | `costmap_service_timeout_sec` | Per-service costmap clear wait | `2.0` |
 | `dwell.pickup` | Stand-in pause for human loading | `3.0` |
 | `dwell.dropoff` | Stand-in pause for human unloading | `3.0` |
+| `use_behavior_tree` | Use the XML courier executor; fallback stays available | `false` |
+| `behavior_tree_xml` | BehaviorTree.CPP v4 mission XML path | supplied by launch |
+| `behavior_tree_tick_period_sec` | Non-blocking BT polling period | `0.05` |
 | `max_concurrent_jobs` | Simultaneous active jobs; must remain one | `1` |
 | `queue_depth` | Waiting job queue; must remain disabled | `0` |
 | `nav_action_name` | Nav2 action name | `navigate_to_pose` |
@@ -91,6 +97,20 @@ arguments: `localization`, `nav2_delay`, `headless`, `rviz`, `x`, `y`, and
 `yaw`. Courier-facing `spawn_x`, `spawn_y`, and `spawn_yaw` arguments default to
 Gazebo `(-2.4, 2.2, 0.0)`, corresponding to map-frame reception
 `(0.6, 4.2, 0.0)`. It defaults to AMCL and staggers startup behind the base stack.
+
+The hand-written Phase 1 executor remains the default. Enable the bonus courier
+behavior tree without editing YAML:
+
+```bash
+ros2 launch acadbot_courier courier_demo.launch.py use_behavior_tree:=true
+```
+
+The XML `Sequence` declares pickup navigation, pickup dwell, dropoff navigation,
+and dropoff dwell. Each navigation leaf is wrapped in BT.CPP's built-in
+`RetryUntilSuccessful`, while the custom stateful leaf sends and polls the same
+Nav2 client used by the fallback. Halting the tree cancels the active Nav2 goal;
+the outer delivery action reports `CANCELED` only after confirmation, otherwise
+it terminates honestly as `TIMEOUT`.
 
 ## Demo scenarios
 

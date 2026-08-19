@@ -16,6 +16,13 @@ courier_node:
       pickup: 3.0
       dropoff: 3.0
 
+    # The proven hand-written executor remains the safe default. The launch
+    # file supplies the installed XML path and can enable the bonus with
+    # use_behavior_tree:=true.
+    use_behavior_tree: false
+    behavior_tree_xml: ""
+    behavior_tree_tick_period_sec: 0.05
+
     max_concurrent_jobs: 1
     queue_depth: 0
 

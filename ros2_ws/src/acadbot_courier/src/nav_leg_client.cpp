@@ -131,6 +131,38 @@ double NavLegClient::distance_remaining() const
   }
 }
 
+std::optional<NavResult> NavLegClient::poll_result()
+{
+  std::shared_future<GoalHandle::WrappedResult> result_future;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!result_future_.has_value()) {
+      return NavResult::ABORTED;
+    }
+    result_future = result_future_.value();
+  }
+
+  if (result_future.wait_for(0ms) != std::future_status::ready) {
+    return std::nullopt;
+  }
+
+  const auto wrapped_result = result_future.get();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    goal_handle_.reset();
+    result_future_.reset();
+  }
+  switch (wrapped_result.code) {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      return NavResult::SUCCEEDED;
+    case rclcpp_action::ResultCode::CANCELED:
+      return NavResult::CANCELED;
+    case rclcpp_action::ResultCode::ABORTED:
+    default:
+      return NavResult::ABORTED;
+  }
+}
+
 NavResult NavLegClient::wait_for_result(
   double timeout_sec, const std::function<bool()> & cancel_requested)
 {
