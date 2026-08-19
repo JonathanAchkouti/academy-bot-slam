@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cmath>
-#include <limits>
 #include <thread>
 #include <utility>
 
@@ -128,7 +127,7 @@ double NavLegClient::distance_remaining() const
     return std::hypot(dx, dy);
   } catch (const tf2::TransformException & error) {
     RCLCPP_DEBUG(logger_, "Distance fallback unavailable: %s", error.what());
-    return std::numeric_limits<double>::quiet_NaN();
+    return -1.0;
   }
 }
 
