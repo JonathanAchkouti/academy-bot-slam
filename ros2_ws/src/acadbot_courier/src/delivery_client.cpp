@@ -23,9 +23,12 @@ using namespace std::chrono_literals;
 
 std::atomic<bool> cancel_requested{false};
 
-void handle_signal(int)
+void handle_signal(int signal_number)
 {
-  cancel_requested.store(true);
+  if (cancel_requested.exchange(true)) {
+    std::signal(signal_number, SIG_DFL);
+    std::raise(signal_number);
+  }
 }
 
 template<typename FutureT>
